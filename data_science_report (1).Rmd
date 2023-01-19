@@ -1,0 +1,629 @@
+---
+title: "Analysis of Standardized Test Scores in Reading and Math during the First Years of the COVID-19 Pandemic"
+author: "Group 3: Abdallah Al Zubi, Abdulrahman Alruways, Shahid Attar, Sam Padilla, Marc Wade"
+date: "December 15, 2022"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE, echo = FALSE}
+library(tidyverse)
+library(tigris)
+options(tigris_use_cache = TRUE)
+library(tidycensus)
+census_api_key("1399076faad9d200f40612ea381d69c186925b5b",
+               install = TRUE,
+               overwrite = TRUE)
+library(lubridate)
+```
+
+```{r, include = FALSE, echo = FALSE}
+#importing NAEP data from Github
+#link to repository: https://github.com/s-padilla/Data-Science-UNO-F2022
+
+scores_by_ELL <- read.csv(file = "https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/scores_by_ELL.csv") %>%
+  mutate(change = score_2022 - score_2019)
+scores_by_SNAP <- read.csv(file = "https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/scores_by_SNAP.csv") %>%
+  mutate(eligible_change = eligible_2022 - eligible_2019,
+         not_eligible_change = not_eligible_2022 - not_eligible_2019)
+scores_by_race <- read.csv(file = "https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/scores_by_race.csv") %>%
+  filter(race == "White" |
+           race == "Black" |
+           race == "Hispanic" |
+           race == "Asian") %>%
+  mutate(change = score_2022 - score_2019)
+scores_by_state <- read.csv(file = "https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/scores_by_state.csv") %>%
+  mutate(change = score_2022 - score_2019)
+
+state_list <- unique(scores_by_state$state)
+```
+
+```{r, include = FALSE, echo = FALSE}
+#importing COVID-19 death data from Github
+covid_data <- read.csv(file = "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv") %>%
+  mutate(date = ymd(date)) %>%
+  filter(state %in% state_list)
+```
+
+```{r, include = FALSE, echo = FALSE}
+#Importing Census data via API
+acs_variable_list <- c("B22002_001", #total households in state
+                       "B22002_003", #total households receiving food stamps/SNAP in past 12 months with children under 18
+                       "B22005A_001", #total households, white householder
+                       "B22005A_002", #white householder, received food stamps/SNAP in past 12 months
+                       "B22005B_001", #total households, black householder
+                       "B22005B_002", #black householder, received food stamps/SNAP
+                       "B22005D_001", #total households, Asian householder
+                       "B22005D_002", #Asian householder, received food stamps/SNAP
+                       "B22005I_001", #total households, hispanic/latino householder (any race)
+                       "B22005I_002", #hispanic/latino householder, received food stamps/SNAP
+                       "B01003_001", #total population
+                       "B09001_001", #total population under age 18
+                       "B01002_001", #median age (total population)
+                       "B01002_002", #median age (male)
+                       "B01002_003", #median age(female)
+                       "S1602_C03_001", #number of limited English-speaking households
+                       "S1602_C04_001", #percent of households with limited English-speaking ability
+                       "S1701_C02_002" #total population under age 18 in poverty status
+                       )
+
+demographics_2020 <- get_acs(geography = "state",
+                             variables = acs_variable_list,
+                             state = state_list,
+                             year = 2020) %>%
+  rename(state = NAME) %>%
+  select(state, variable, estimate) %>%
+  arrange(state)
+
+demographics_2020$variable <- demographics_2020$variable %>%
+  gsub("B22002_001", "total_households", .) %>%
+  gsub("B22002_003", "total_households_receiving_SNAP", .) %>%
+  gsub("B22005A_001", "total_households_white_householder", .) %>%
+  gsub("B22005A_002", "white_households_received_SNAP", .) %>%
+  gsub("B22005B_001", "total_households_black_householder", .) %>%
+  gsub("B22005B_002", "black_households_received_SNAP", .) %>%
+  gsub("B22005D_001", "total_households_asian_householder", .) %>%
+  gsub("B22005D_002", "asian_households_received_SNAP", .) %>%
+  gsub("B22005I_001", "total_households_hispanic_latino_any_race", .) %>%
+  gsub("B22005I_002", "hispanic_latino_household_received_SNAP", .) %>%
+  gsub("B01003_001", "total_population", .) %>%
+  gsub("B09001_001", "total_population_under_18", .) %>%
+  gsub("B01002_001", "median_age_total_population", .) %>%
+  gsub("B01002_002", "median_age_male", .) %>%
+  gsub("B01002_003", "median_age_female", .) %>%
+  gsub("S1602_C03_001", "limited_english_households_total", .) %>%
+  gsub("S1602_C04_001", "limited_english_households_pct", .) %>%
+  gsub("S1701_C02_002", "total_population_under_18_poverty_status", .)
+
+demographics_2020_wide <- demographics_2020 %>%
+  pivot_wider(names_from = variable,
+              values_from = estimate) %>%
+  mutate(total_snap_pct = total_households_receiving_SNAP / total_households,
+         white_snap_pct = white_households_received_SNAP / total_households_white_householder,
+         black_snap_pct = black_households_received_SNAP / total_households_black_householder,
+         asian_snap_pct = asian_households_received_SNAP / total_households_asian_householder,
+         hispanic_snap_pct = hispanic_latino_household_received_SNAP / total_households_hispanic_latino_any_race,
+         child_poverty_rate = total_population_under_18_poverty_status / total_population_under_18)
+
+demographics_2020_long <- demographics_2020_wide %>%
+  pivot_longer(cols = 2:25,
+               names_to = "demographic_category",
+               values_to = "value")
+
+demographics_2020_long$demographic_category <- demographics_2020_long$demographic_category %>%
+  gsub(pattern = "_",
+       replacement = " ",
+       .) %>%
+  gsub(pattern = "(households )",
+       replacement = "households, ",
+       .) %>%
+  gsub(pattern = "white",
+       replacement = "White",
+       .) %>%
+  gsub(pattern = "black",
+       replacement = "Black",
+       .) %>%
+  gsub(pattern = "asian",
+       replacement = "Asian",
+       .) %>%
+  gsub(pattern = "hispanic( latino)*",
+       replacement = "Hispanic/Latino",
+       .) %>%
+  gsub(pattern = "(any race)",
+       replacement = "\\(any race\\)") %>%
+  gsub(pattern = "english",
+       replacement = "English",
+       .) %>%
+  gsub(pattern = "pct",
+       replacement = "percentage",
+       .) %>%
+  gsub(pattern = "(snap)",
+       replacement = "SNAP",
+       .) %>%
+  gsub(pattern = "(poverty status)",
+       replacement = "in poverty status",
+       .)
+  
+```
+
+```{r, include = FALSE, echo = FALSE}
+#importing state geographical data for mapping
+state_geog <- states(cb = TRUE,
+                     year = 2020) %>%
+  filter(NAME %in% state.name |
+           NAME == "District of Columbia") %>%
+  filter(NAME != "Alaska" &
+           NAME != "Hawaii") %>%
+  rename(state = NAME)
+```
+
+\begin{center}
+\textbf{Abstract}
+\end{center}
+
+>The COVID-19 pandemic has disrupted routines in all aspects of American life, perhaps none as profoundly as the education system. During the spring semester of the 2019-2020 school year, more than 50 million students in 48 states were affected by school closures and distance learning. As we enter the fourth school year affected by the pandemic, many schools maintain distance or hybrid learning programs, which has increased the need for education technology and has highlighted access disparities along racial and economic lines. This project reviews the COVID-19 Impact on Digital Learning (CIDL) dataset compiled by LearnPlatform, comparing engagement with various education technology products by students from school districts in 22 states and the District of Columbia. We compare the CIDL data with demographic data from the 2020 United States Census, standardized testing data from the National Center for Education Statistics' National Assessment of Educational Progress, and COVID-19 data to determine whether they correspond with other demographic trends and educational outcomes in the context of the ongoing COVID-19 pandemic.
+
+# 1. Introduction
+
+The motivation for this project stems from need to understand how the ongoing COVID-19 pandemic has affected the education of children in the United States. In particular, as many school districts transitioned to remote learning in 2020 and are still using hybrid instruction models into 2022, it is important to measure the impact of online-only learning so that we can begin to address potential long-term consequences.
+
+The specific impetus for this project came from a project competition posted on Kaggle by LearnPlatform. The specific aim of the competition was:
+
+>to explore (1) the state of digital learning in 2020 and (2) how the engagement of digital learning relates to factors such as district demographics, broadband access, and state/national level policies and events.[^1]
+
+[^1]: *See* LearnPlatform COVID-19 Impact on Digital Learning, *available at* https://www.kaggle.com/competitions/learnplatform-covid19-impact-on-digital-learning.
+
+There are some issues with LearnPlatforms's data, as we detail below. However, we were able to address some of these deficiencies with supplemental data from other sources and make some initial observations about how remote learning has affected student outcomes in the first two years of the pandemic.
+
+\newpage
+
+# 2. Methodology
+
+## 2.1 Data sources
+
+Our data come from four sources:
+
+  1. LearnPlatform, an educational technology company that tracks the effectiveness of elearning products;
+  2. The National Center for Education Statistics (NCES), an agency of the United States Department of Education;
+  3. The *New York Times*'s aggregation of data related to COVID-19 from states and counties across the United States; and
+  4. The American Community Survey (ACS), a product of the United States Census Bureau.
+  
+Data on engagement with specific educational technology products was compiled by LearnPlatform. This dataset includes daily measurements of page-load events from school districts in 23 states and the District of Columbia. A "page-load event" includes any instance of a student accessing a website, app, or other service. The LearnPlatform dataset also tracks the percentage of students in each district that have at least one page-load event of a given product on a given day. These data track page-load events from throughout calendar year 2020.
+
+We measured specific student outcomes using data from the NCES that tracks standardized testing scores in reading and math for fourth- and eighth-graders. NCES does not survey testing outcomes every year, but does have data for 2022 and 2019, the last full calendar year prior to the COVID-19 pandemic. NCES also tracks English language-learning status for students.
+
+Data on U.S. deaths attributable to the COVID-19 pandemic at the state and county level were aggregated by the *New York Times*. This dataset specifically measures a daily cumulative total number of deaths attributable to COVID-19 beginning in January 2020.
+
+Finally, data on demographic factors like race, ethnicity, and participation in the Supplemental Nutrition Assistance Program (SNAP) are compiled by the United States Census Bureau based on decennial census data, as well as one-, three-, and five-year estimates in the American Community Survey (ACS).
+
+## 2.2 Reproducibility
+
+This report was written using the **R** programming language, and should be entirely reproducible using code in the markdown of this file. All data in this report are publicly available, although some datasets are not conveniently accessible in machine-readable formats. Wherever possible, the code includes direct calls to data available online; this is the case for the ACS data (accessed via API) and the *New York Times* COVID data (accessed directly by URL). The LearnPlatform and NCES data are stored in cleaned and convenient formats in our publicly accessible data repository.
+
+## 2.3 Data limitations
+
+Each dataset present some limitations to our analysis. One issue that cuts across all of our datasets is a limited ability to distinguish between urban, suburban, and rural populations. While the LearnPlatform data tracks this factor in its engagement data, districts are de-identified for privacy reasons, limiting our ability to draw conclusions based on geography. The *New York Times* COVID-19 data do track deaths at the state and county levels, and the ACS data are available at the state, county, and census tract level; however, without knowing which districts are actually included in the LearnPlatform data, we are limited to using state-level COVID and demographic data. The NCES only present standardized testing data at the state level.
+
+The LearnPlatform data measure page-load events, but do not include other measurements of student engagement (*e.g.*, time spent with a given product, comparisons of engagement rates between products used for similar subjects) or success (*e.g.*, pass/fail rates and other grading data). For this reason, we use standardized testing data from the NCES as a proxy for student success, focusing specifically on reading and math test scores for fourth- and eighth-graders. We compare data from 2019 and 2022, the two most recent years with available data, to compare student outcomes from the last academic year before the COVID-19 pandemic with the most recent academic year since the beginning of the pandemic, when most American students would have had at least some education delivered remotely using products tracked by LearnPlatform.
+
+The NCES data also provide insight into students' race and ethnicity, free or reduced lunch participation, and English language-learner status, allowing us to draw some conclusions about how these factors affect standardized testing outcomes. However, neither the LearnPlatform data do track student outcomes by race, ethnicity, or English language-learner status, limiting our ability draw specific conclusions about the impact of the switch to online learning on specific demographic groups. We were able to obtain additional race and ethnicity data from the ACS, allowing us to draw further conclusions about the relationship between demographics and test scores.
+
+A fundamental component of student success in an online learning environment is also access to electronic resources, in terms of required hardware (*e.g.*, computers, tables), infrastructure (*i.e.*, reliable Internet access for attending class and completing assignments), and context (*i.e.*, an environment at home or elsewhere that minimizes learning interruptions). The LearnPlatform data do not include measurements of these factors, so we were not able to analyze their impact on student engagement.
+
+Finally, the *New York Times* COVID-19 data are limited to daily cumulative death counts. While this is an important measure of the impact of the pandemic, its affect on student learning outcomes was likely minimized by several factors (*e.g.*, many students were learning from home throughout 2020, young people tend to have less severe infections). Community spread would likely have been more directly relevant to our analysis, but that data, even at the state level, was difficult to find in a convenient format.
+
+## 2.4 Cleaning process
+
+We primarily used **R** to clean and prepare our data for analysis. We made particular use of the tidyverse collection,[^2] which includes the dplyr, ggplot2, stringr, and tidyr packages (among others). We also made extensive use of the lubridate package to deal with time-based data.
+
+[^2]: *See* https://www.tidyverse.org/.
+
+We used the tidycensus package[^3] to collect ACS data using the Census's ACS 5-Year Data API.[^3] Since the API is accessed using search variables, we used **R** to rename and rearrange these variables to a more convenient structure for plotting.
+
+[^3]: *See* https://cran.r-project.org/web/packages/tidycensus/index.html.
+[^4]: *Available at* https://www.census.gov/data/developers/data-sets/acs-5year.html.
+
+The LearnPlatform datasets on Kaggle were too large to work with directly for this report, so we used the data.table package in **R** to aggregate the relevant files into a single dataset. We then created new, smaller files of the processed data for use in this report, but the original raw data are still available on the Kaggle contest website.
+
+The NCES data are not available for direct access by URL or download; instead, the user must select and download individual reports. We downloaded the reports of interest and restructured them using Excel, then did further cleaning and analysis in **R**. Links to our restructured files, as well as the code for cleaning the data, are included in the **R** code for this project.
+
+## 2.5 Methods
+
+### 2.5.1 Census data
+
+The U.S. Census collects data about the people living in the United States along a number of dimensions, including race and ethnicity. Census respondents can self-identify as a member of one or more racial groups. For the sake of simplicity, we chose to focus on the three largest race categories by total population: White, Black or African American, and Asian. We also included data about ethnicity, which for Census purposes measures whether a person is of Hispanic or Latino origin. Hispanic/Latino is not treated as a race category for Census purposes, and a respondent can report as any race or combination of races.
+
+The Census data we used include data for individuals who identify as at least White, Black or African American, or Asian (including those who identify as one of these races in combination with any other races) regardless of ethnicity. We also include data for individuals who identify as Hispanic or Latino, regardless of race. For this reason, there may be some overlap among the data we used for our analysis. However, we feel the effects of any overlap or "double dipping" are minimal, given the overall trends we see below.
+
+Throughout this report, we refer to race and ethnicity identifiers collectively as "race groups" for convenience.
+
+Some Census variables are also measured at the household level rather than at the individual level. This is the case for participation in SNAP, since eligibility is based on household income. For this reason, data related to SNAP participation in this report are presented as the proportional number of households with a householder of the identified race in a state. For example, we define the participation rate of Asian households for a state as the number of participating households with an Asian householder divided by the total number of households with an Asian householder.
+
+When focusing specifically on participating households with children under the age of 18, we recognize that this likely underrepresents the true number of school-aged children receiving SNAP or free/reduced lunch benefits, since a single household can have more than one child in school. We also recognize that a householder may identify as more than one race, in addition to identifying as Hispanic or Latino.
+
+### 2.5.2 Student engagement and COVID-19 data
+
+As noted above, the LearnPlatform data measures the number of page-load events by product for every day of 2020. It also reports an engagement index that measures the total page-load events per $1000$ students of a given product on a given day. We used the monthly mean of this engagement index across all states to measure whether there were any connections between new COVID-19 cases and deaths and student engagement, both also measured by monthly mean.
+
+# 3. Results
+
+## 3.1 Changes in standardized test scores
+
+Initial inspection of standardized testing data for reading and math shows there is little to be positive about at the national level. In fact, the scaled reading score dropped $5$ points from 2020 to 2022, the largest drop in reading since 1990, while the scaled mathematics score dropped $7$ points, reflecting the first-ever drop for this subject.[^5]
+
+[^5]: *See* NAEP Long-Term Trend Assessment Results: Reading and Mathematics, *available at* https://www.nationsreportcard.gov/highlights/ltt/2022/#section-recent-student-performance-trends.
+
+At the state level, ignoring factors like race, poverty, and English proficiency, we see that the change in mean test scores for both subjects at both the fourth and eighth grade levels are non-positive.
+
+```{r fig1, fig.height = 6.2, fig.width = 5, fig.align = "center", echo = FALSE}
+state_score_plot <- ggplot(data = scores_by_state %>%
+                             mutate(subject = gsub(pattern = "reading_4",
+                                                   replacement = "4th grade reading",
+                                                   subject),
+                                    subject = gsub(pattern = "reading_8",
+                                                   replacement = "8th grade reading",
+                                                   subject,),
+                                    subject = gsub(pattern = "math_4",
+                                                   replacement = "4th grade math",
+                                                   subject),
+                                    subject = gsub(pattern = "math_8",
+                                                   replacement = "8th grade math",
+                                                   subject)),
+                           aes(x = state,
+                               y = change)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  facet_wrap(~ subject) +
+  labs(subtitle = "Fig. 1: No state saw an increase in mean test score",
+       x = "",
+       y = "Change in mean test score (2019-2022)") +
+  theme(axis.text = element_text(size = 7))
+
+state_score_plot
+```
+
+### 3.1.1 Effects of race on changes in mean test score
+
+We used each race group to model the effect of population share on the change in mean test score for each subject, where population share is the percentage of a state's population identifying with the specified race group. These models follow the convention
+
+\begin{center}
+  \begin{equation*}
+    \text{y} = x_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_3 + 
+    \beta_4 x_4
+  \end{equation*}
+\end{center}
+
+where $y$ is the change in mean subject score, $x_0$ is the intercept value, $x_1$, $x_2$, $x_3$, and $x_4$ are the Asian, Black, Hispanic/Latino, and White population shares, respectively, and $\beta_i$, $i \in [1, 4]$, are regression coefficients.
+
+```{r fig2, fig.height = 9.75, fig.width = 7.75, fig.align = "center", message = FALSE, warning = FALSE, echo = FALSE}
+race_scores <- demographics_2020_wide %>%
+  select(state,
+         total_households,
+         total_households_asian_householder,
+         total_households_black_householder,
+         total_households_hispanic_latino_any_race,
+         total_households_white_householder) %>%
+  mutate(Asian = total_households_asian_householder / total_households,
+         Black = total_households_black_householder / total_households,
+         Hispanic = total_households_hispanic_latino_any_race / total_households,
+         White = total_households_white_householder / total_households) %>%
+  pivot_longer(cols = c(Asian, Black, Hispanic, White),
+               names_to = "race",
+               values_to = "population_percentage") %>%
+  merge(scores_by_race) %>%
+  select(-c(score_2019, score_2022)) %>%
+  mutate(subject = paste0(subject, "_change")) %>%
+  pivot_wider(names_from = subject,
+              values_from = change)
+
+race_subject_plot <- ggplot(data = race_scores %>%
+                              pivot_longer(cols = c(math_4_change,
+                                                    math_8_change,
+                                                    reading_4_change,
+                                                    reading_8_change),
+                                           names_to = "subject",
+                                           values_to = "change") %>%
+                               mutate(subject = gsub(pattern = "_change",
+                                                     replacement = "",
+                                                     subject),
+                                      subject = gsub(pattern = "math_4",
+                                                     replacement = "4th grade math",
+                                                     subject),
+                                      subject = gsub(pattern = "math_8",
+                                                     replacement = "8th grade math",
+                                                     subject),
+                                      subject = gsub(pattern = "reading_4",
+                                                     replacement = "4th grade reading",
+                                                     subject),
+                                      subject = gsub(pattern = "reading_8",
+                                                     replacement = "8th grade reading",
+                                                     subject)),
+                            aes(x = population_percentage,
+                                y = change)) +
+  geom_point(na.rm = TRUE,
+             size = 0.75,
+             aes(color = race)) +
+  geom_smooth(method = "lm",
+              se = FALSE,
+              na.rm = TRUE) +
+  facet_wrap(race ~ subject) +
+  labs(subtitle = "Fig. 2: Changes in mean test scoreby state and race group population share (2019-2022)",
+       x = "Percent of state population",
+       y = "Change in mean test score") +
+  theme(legend.position = "none")
+
+race_subject_plot
+```
+
+\newpage
+
+The most significant results are from the **eighth-grade reading** scores, with a **$p$-value of $0.0015$**. The equation for this model is
+
+\begin{center}
+  \begin{equation}
+    y = 19.506 - 17.429 x_1 - 19.197 x_2 + 5.674 x_3 + 4.587 x_4
+  \end{equation}
+\end{center}
+
+We found similarly significant results for **fourth-grade reading** scores, with a **$p$-value of $0.0318$**. The equation for this model is
+
+\begin{center}
+  \begin{equation}
+    y = -7.824 - 19.075 x_1 - 7.253 x_2 + 17.932 x_3 + -26.397 x_4
+  \end{equation}
+\end{center}
+
+Based on these models, it is likely that race played at least some role in the changes in mean score for reading at these grade levels.
+
+Using similar models for fourth- and eighth-grade math scores, we found $p$-values of $0.1682$ and $0.614$, respectively, meaning we cannot conclude that race was a significant factor affecting the mean math test scores for those grades.
+
+### 3.1.2 Effects of free/reduced lunch on changes in mean test score
+
+```{r fig3, fig.width = 4.25, fig.height = 5.5, fig.align = "center", message = FALSE, warning = FALSE, echo = FALSE}
+#SNAP scores
+snap_scores <- demographics_2020_wide %>%
+  select(state, total_snap_pct) %>%
+  mutate(non_snap_pct = 1 - total_snap_pct) %>%
+  pivot_longer(cols = c(total_snap_pct, non_snap_pct),
+               names_to = "snap_eligibility",
+               values_to = "population_pct") %>%
+  mutate(snap_eligibility = gsub(pattern = "total_snap_pct",
+                                 replacement = "Eligible",
+                                 snap_eligibility),
+         snap_eligibility = gsub(pattern = "non_snap_pct",
+                                 replacement = "Not eligible",
+                                 snap_eligibility))
+
+scores_by_SNAP_long <- scores_by_SNAP %>%
+    select(-c(eligible_2019, eligible_2022, not_eligible_2019, not_eligible_2022)) %>%
+    pivot_longer(cols = c(eligible_change, not_eligible_change),
+                 names_to = "snap_eligibility",
+                 values_to = "change") %>%
+    mutate(subject = gsub(pattern = "math_4",
+                          replacement = "4th grade math",
+                          subject),
+           subject = gsub(pattern = "math_8",
+                          replacement = "8th grade math",
+                          subject),
+           subject = gsub(pattern = "reading_4",
+                          replacement = "4th grade reading",
+                          subject),
+           subject = gsub(pattern = "reading_8",
+                          replacement = "8th grade reading",
+                          subject),
+           snap_eligibility = gsub(pattern = "_change",
+                                   replacement = "",
+                                   snap_eligibility),
+           snap_eligibility = gsub(pattern = "_",
+                                   replacement = " ",
+                                   snap_eligibility),
+           snap_eligibility = gsub(pattern = "^eligible",
+                                   replacement = "Eligible",
+                                   snap_eligibility),
+           snap_eligibility = gsub(pattern = "not",
+                                   replacement = "Not",
+                                   snap_eligibility))
+
+snap_scores <- snap_scores %>%
+  merge(scores_by_SNAP_long)
+
+#head(snap_scores)
+
+snap_score_plot <- ggplot(data = snap_scores,
+                          aes(x = population_pct,
+                              y = change)) +
+  geom_point() +
+  geom_smooth(method = "lm",
+              se = FALSE) +
+  facet_grid(subject ~ snap_eligibility,
+             scales = "free") +
+  labs(subtitle = "Fig. 3: Changes in mean test score by\nfree/reduced lunch eligibility (2019-2022)",
+       x = "Percent of state population",
+       y = "Change in mean test score")
+
+snap_score_plot
+```
+
+We also analyzed the effect of eligibility to receive free or reduced-price lunches on changes in mean test score. In **figure 3**, we plot the change in mean test score by subject and grade against the percent of households receiving SNAP benefits. We were unable to find complete data regarding the percentage of students receiving free or reduced-price lunches in each state, but most students who receive free or reduced-price lunches also live in households that receive SNAP benefits, so we feel the SNAP participation rate is a fair proxy.
+
+At any rate, we did not find any significant relationships between free/reduced-price lunch eligibility and test scores. As we can see visually from **figure 3**, this is likely due to the non-uniform variance of the data.
+
+### 3.1.3 Effects of English language-learner status on change in mean test scores
+
+```{r fig4, fig.width = 4.5, fig.height = 6, fig.align = "center", message = FALSE, warning = FALSE, echo = FALSE}
+ell_scores <- scores_by_ELL %>%
+  select(-c(score_2019, score_2022)) %>%
+  pivot_wider(names_from = subject,
+              values_from = change)
+
+ell_demo <- demographics_2020_wide %>%
+  select(state, limited_english_households_pct) %>%
+  mutate(ELL = limited_english_households_pct / 100,
+         Not_ELL = 1 - ELL) %>%
+  select(state, ELL, Not_ELL) %>%
+  pivot_longer(cols = c(ELL, Not_ELL),
+               names_to = "ELL_status",
+               values_to = "population_pct") %>%
+  mutate(ELL_status = gsub(pattern = "_",
+                           replacement = " ",
+                           ELL_status)) %>%
+  merge(scores_by_ELL) %>%
+  select(-c(score_2019, score_2022)) %>%
+  pivot_wider (names_from = subject,
+               values_from = change)
+
+ell_score_data <- ell_demo %>%
+  pivot_longer(cols = c(math_4, math_8, reading_4, reading_8),
+                                        names_to = "subject",
+                                        values_to = "change") %>%
+                             mutate(subject = gsub(pattern = "math_4",
+                                                   replacement = "4th grade math",
+                                                   subject),
+                                    subject = gsub(pattern = "math_8",
+                                                  replacement = "8th grade math",
+                                                  subject),
+                                    subject = gsub(pattern = "reading_4",
+                                                   replacement = "4th grade reading",
+                                                   subject),
+                                    subject = gsub(pattern = "reading_8",
+                                                   replacement = "8th grade reading",
+                                                   subject),
+                                    ELL_status = gsub(pattern = "^ELL$",
+                                                      replacement = "English learner",
+                                                      ELL_status),
+                                    ELL_status = gsub(pattern = "^Not ELL$",
+                                                      replacement = "Not English learner",
+                                                      ELL_status))
+
+ell_score_plot <- ggplot(data = ell_score_data,
+                         aes(x = population_pct,
+                             y = change)) +
+  geom_point() +
+  geom_smooth(method = "lm",
+              se = FALSE) +
+  labs(subtitle = "Fig. 4: Changes in mean test score by\nEnglish language-learner status (2019-2022)",
+       x = "Percent of state population",
+       y = "Change in mean score") +
+  facet_grid(subject ~ ELL_status,
+             scales = "free")
+
+ell_score_plot
+```
+
+From **figure 4**, we can observe that English language-learners tended to have better outcomes than their non-learner peers. The most significant relationship between a state's English language-learner population and changes in mean test scores occurs in **fourth-grade reading**. Our model has the following equation:
+
+\begin{center}
+  \begin{equation}
+    y_1 = -9.198 + 149.462 x_1
+  \end{equation}
+\end{center}
+
+where $y_1$ represents the change in mean score and $x_1$ represents the percent of the state's population with limited English proficiency. This relationship is highly correlated, with a $p$-value of $0.003$.
+
+Curiously, the decrease in **eighth-grade reading** for non-English language-learners (*i.e.*, students with high English proficiency) is also highly related to the share of a state's population that has English proficiency. Our model has the following equation:
+
+\begin{center}
+  \begin{equation}
+    y_2 = 47.31 - 52.12 x_2
+  \end{equation}
+\end{center}
+
+where $y_2$ represents the change in mean score and $x_2$ represents the percent of the state's population with English proficiency. This relationship is also highly correlated, with a $p$-value of $0.007$.
+
+Beyond this, in the English language-learner category, we can observe a clear mitigation in score decrease when they make up a larger percentage of the state population. One possible explanation is that as non-English language-learners make up at least $90 \%$ of the population in most states, a slight reduction is negligible. For the other group, this change can be a $200$ or $300 \%$ increase in proportionality. It is plausible that states with a more significant population of students whose first language is not English more likely have more robust programs with more experienced faculty and more resources assigned to work with. 
+
+## 3.2 COVID-19 and student engagement rates
+
+```{r fig5, fig.width = 6, fig.height = 4, fig.align = "center", message = FALSE, warning = FALSE, echo = FALSE}
+covid_data <- read.csv("https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/state_monthly_summary_data.csv")
+
+#head(covid_data)
+
+state_summary_monthly <- covid_data %>%
+  group_by(year, month) %>%
+  summarize(mean_engagement_index = mean(average_engagement_index),
+            mean_daily_cases = mean(daily_cases),
+            mean_daily_deaths = mean(daily_deaths)) %>%
+  mutate(date = ymd(paste(year, month, "01", sep = "-"))) %>%
+  pivot_longer(cols = c(mean_engagement_index, mean_daily_cases, mean_daily_deaths),
+               names_to = "variable",
+               values_to = "value") %>%
+  mutate(variable = gsub(pattern = "_",
+                         replacement = " ",
+                         variable),
+         variable = gsub(pattern = "^m",
+                         replacement= "M",
+                         variable)) %>%
+  arrange(variable)
+
+#head(state_summary_monthly)
+
+monthly_summary_plot <- ggplot(data = state_summary_monthly,
+                               aes(x = date,
+                                   y = log(value))) +
+  geom_line(aes(color = variable)) +
+  labs(title = "Fig. 5: Monthly summary data for 2020",
+       x = "",
+       y = "log(monthly value)") +
+  guides(color = guide_legend(title = "")) +
+  scale_x_date(date_labels = "%B")
+
+monthly_summary_plot
+```
+
+Finally, we compared student engagement rates with COVID-19 case and death counts for 2020. Specifically, we measured the monthly mean engagement index across all states with the monthly mean COVID-19 cases and deaths. We found no significant relationship, as demonstrated in **figure 5**.
+
+We can observe that the mean engagement ratio stayed relatively consistent despite the increasing number of deaths. The only real exceptions are a clear dip during the summer months when school was not in session, and a smaller dip towards the end of the year. While deaths were having an uptick during this time period, it is more likely that the engagement reductions was caused by the seasonal drop in motivation in students after midterms and around Thanksgiving break. This implies that the severity of the pandemic had little to no effect on the rate at which students and teachers used these digital products. This makes sense as although the move online was jarring, it was made to ensure education was consistent, albeit inferior, and many of the most popular products we saw being used were also used extensively prior to the outbreak of COVID-19.
+
+## 3.3 Education products
+
+```{r fig6, fig.align = "center", fig.width = 5.5, fig.height = 4.5, echo = FALSE}
+summary_top_used <- read.csv("https://raw.githubusercontent.com/s-padilla/Data-Science-UNO-F2022/main/state_product.csv") %>%
+  mutate(use_count = count_state_product / 10000,
+         product_name = gsub(pattern = "Google",
+                             replacement = "Google (products)",
+                             product_name)) %>%
+  filter(product_name != "Chrome Web Store") %>%
+  arrange(desc(use_count))
+
+top_ten <- summary_top_used[1:10, ]
+
+top_products <- ggplot(data = top_ten,
+                       aes(x = reorder(product_name, use_count),
+                           y = use_count)) +
+  geom_bar(stat = "identity") +
+  labs(subtitle = "Fig. 6: Google products were the most used in 2020",
+       x = "Top 10 products",
+       y = "Page-load events (10,000)") +
+  coord_flip()
+
+top_products
+```
+
+Using the data from LearnPlatform, we found that Google products accounted for approximately $400,000$ page-load events in 2020 across all districts in all states. We include Google products like Drive and Pages, where teachers were likely to have posted course content for students to access, as well as products like Docs and Sheets, where students were likely completing assignments.
+
+**Figure 6** demonstrates that Googple products far outpaced
+
+# 4. Conclusions
+
+Overall, we found little evidence that factors like race, English proficiency, and poverty had any significant impact on standardized test scores during the first year of the COVID-19 pandemic. Specifically, we were unable to explain state-level declines in mean test scores across subjects and grades using race group, English language-learner status, or participation in a state's free or reduced-price lunch program.
+
+Since every state showed an overall non-positive change in test scores between 2019 and 2022, and several states showed significant negative changes, there is likely some other factor or set of factors at work. While we can only speculate what those factors might be, we suspect it is likely that the scale of the COVID-19 pandemic was so large, especially early on, that it eclipsed most social differences, at least in terms of educational outcomes. That said, interesting candidates for further study are the quality of student engagement with remote learning products, including the quality of content presented, student access to required hardware and software, and environmental factors like a conducive environment for students to engage with course content.
+
+\newpage
+
+\begin{center}
+\textbf{References}
+\end{center}
+
+1. LearnPlatform. (2020). *LearnPlatform Covid-19 Impact on Digital Learning.* Retrieved from (https://www.kaggle.com/c/learnplatform-covid19-impact-on-digital-learning)
+2. National Center for Education Statistics. (2022). *National Assessment of Educational Progress.* Retrieved from (https://www.nationsreportcard.gov/ndecore/landing)
+3. The New York Times. (2022). *Coronavirus (Covid-19) Data in the United States.* Retrieved from (https://github.com/nytimes/covid-19-data)
+4. U.S. Census Bureau. (2020). *2015-2020 American Community Survey 5-Year Estimates Subject Tables, table IDs S1602 and S1701*. Retrieved from (https://www.census.gov/acs/www/data/data-tables-and-tools/subject-tables/)
+5. U.S. Census Buearu. (2020). *2015-2020 American Community Survey 5-Year Estimates Detailed Tables, table IDs B01002, B01003, B09001, B22002, and B22005.* Retrieved from (https://data.census.gov/table?q=b22002&d=ACS+5-Year+Estimates+Detailed+Tables&tid=ACSDT5Y2020.B22002)
